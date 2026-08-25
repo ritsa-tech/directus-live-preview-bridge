@@ -1,0 +1,79 @@
+{
+  "name": "directus-live-preview-bridge",
+  "version": "0.1.0",
+  "description": "Stream unsaved Directus item edits to Live Preview frontends.",
+  "icon": "preview",
+  "keywords": [
+    "directus",
+    "directus-extension",
+    "directus-extension-bundle",
+    "live-preview"
+  ],
+  "homepage": "https://github.com/ritsa-tech/directus-live-preview-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/ritsa-tech/directus-live-preview-bridge/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ritsa-tech/directus-live-preview-bridge.git"
+  },
+  "author": {
+    "name": "Ritsa Tech",
+    "url": "https://ritsa.tech"
+  },
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "dist",
+    "docs"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "directus:extension": {
+    "type": "bundle",
+    "partial": false,
+    "path": {
+      "app": "dist/app.js",
+      "api": "dist/api.js"
+    },
+    "entries": [
+      {
+        "type": "hook",
+        "name": "live-preview-bridge-hook",
+        "source": "src/hook/index.ts"
+      },
+      {
+        "type": "endpoint",
+        "name": "live-preview-bridge-endpoint",
+        "source": "src/endpoint/index.ts"
+      }
+    ],
+    "host": "^12.0.0"
+  },
+  "scripts": {
+    "add": "directus-extension add",
+    "build": "directus-extension build",
+    "check": "npm run typecheck && npm run test && npm run format:check && npm run build && npm run test:dist && npm run validate",
+    "dev": "directus-extension build --watch --no-minify",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "link": "directus-extension link",
+    "prepack": "npm run check",
+    "test": "vitest run",
+    "test:dist": "node scripts/check-dist.mjs",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "validate": "directus-extension validate"
+  },
+  "devDependencies": {
+    "@directus/extensions-sdk": "18.0.4",
+    "@types/node": "^22.20.1",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}
