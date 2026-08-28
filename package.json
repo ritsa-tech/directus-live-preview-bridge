@@ -71,9 +71,9 @@
   },
   "devDependencies": {
     "@directus/extensions-sdk": "18.0.4",
-    "@types/node": "^22.20.1",
+    "@types/node": "^26.3.0",
     "prettier": "^3.9.6",
-    "typescript": "^5.9.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.11"
   }
 }
