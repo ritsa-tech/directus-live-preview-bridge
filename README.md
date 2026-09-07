@@ -60,6 +60,7 @@ type LivePreviewEditsMessage = {
   collection: string;
   primaryKey: unknown;
   edits: Record<string, unknown>;
+  initialValues: Record<string, unknown>;
 };
 ```
 
@@ -79,6 +80,7 @@ export function connectDirectusLivePreview(
     collection: string;
     primaryKey: unknown;
     edits: Record<string, unknown>;
+    initialValues?: Record<string, unknown>;
   }) => void,
 ) {
   const directusOrigin = new URL(directusUrl).origin;
@@ -96,7 +98,11 @@ export function connectDirectusLivePreview(
       !allowedCollections.has(message.collection) ||
       typeof message.edits !== 'object' ||
       message.edits === null ||
-      Array.isArray(message.edits)
+      Array.isArray(message.edits) ||
+      (message.initialValues !== undefined &&
+        (typeof message.initialValues !== 'object' ||
+          message.initialValues === null ||
+          Array.isArray(message.initialValues)))
     ) {
       return;
     }
@@ -114,6 +120,14 @@ export function connectDirectusLivePreview(
 Validate the collection and item in your application before merging `edits` into
 rendered data. Treat every cross-window message as untrusted input, even when
 its origin is expected.
+
+Each message is a complete snapshot of the current `edits`, not an incremental
+patch. Render allowed fields from `initialValues`, then apply the current edits.
+Do not merge into the previous rendered result: a field reset removes its edit
+key. After a save, `initialValues` contains the new saved baseline and `edits`
+can be empty. Older bridge versions omit `initialValues`; use server-fetched
+content as the baseline for those messages. Both objects can contain fields
+available to the editor, so use a trusted preview frontend.
 
 The ready message matters. The Data Studio may send its first update before the
 preview application has mounted. On receipt, the bridge replays the latest
@@ -147,10 +161,11 @@ fall back to the default and produce a warning in the Directus log.
 ## How edit capture works
 
 Directus 12 does not provide a public client API for reading the staged item
-form. The bridge first reads the current form's Vue props. It also listens for
-`input` and `change` events on fields with Directus' `data-collection` and
-`data-field` attributes. The event listener is a fallback for fields whose Vue
-state is not available during a render.
+form. The bridge finds the current form through Vue's mounted VNode tree and
+polls its props. This tree is present in production builds, including those that
+omit per-element Vue devtools metadata. The bridge reads normalized form values
+for native inputs and custom controls such as dropdowns. It skips loading or
+unmounted forms and does not keep a separate cache of native input values.
 
 This dependency on Data Studio internals is why the package targets Directus 12
 explicitly. Run the test suite against a Directus upgrade before rolling it out.

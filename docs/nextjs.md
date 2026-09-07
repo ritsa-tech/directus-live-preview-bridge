@@ -242,6 +242,7 @@ type LivePreviewMessage = {
   collection: string;
   primaryKey: unknown;
   edits: Record<string, unknown>;
+  initialValues?: Record<string, unknown>;
 };
 
 function useDirectusLivePreview({
@@ -278,7 +279,11 @@ function useDirectusLivePreview({
         !ALLOWED_COLLECTIONS.has(message.collection) ||
         typeof message.edits !== 'object' ||
         message.edits === null ||
-        Array.isArray(message.edits)
+        Array.isArray(message.edits) ||
+        (message.initialValues !== undefined &&
+          (typeof message.initialValues !== 'object' ||
+            message.initialValues === null ||
+            Array.isArray(message.initialValues)))
       ) {
         return;
       }
@@ -302,7 +307,29 @@ export function ArticlePreview({
   directusUrl: string;
   livePreviewEnabled: boolean;
 }) {
-  const [article, setArticle] = useState(initialArticle);
+  const [snapshot, setSnapshot] = useState<LivePreviewMessage | null>(null);
+  const activeSnapshot =
+    livePreviewEnabled &&
+    String(snapshot?.primaryKey) === String(initialArticle.id)
+      ? snapshot
+      : null;
+  const baseline = activeSnapshot?.initialValues ?? initialArticle;
+  const edits = activeSnapshot?.edits ?? {};
+  const article = {
+    ...initialArticle,
+    title:
+      typeof edits.title === 'string'
+        ? edits.title
+        : typeof baseline.title === 'string'
+          ? baseline.title
+          : initialArticle.title,
+    body:
+      typeof edits.body === 'string'
+        ? edits.body
+        : typeof baseline.body === 'string'
+          ? baseline.body
+          : initialArticle.body,
+  };
 
   useDirectusLivePreview({
     directusUrl,
@@ -315,17 +342,7 @@ export function ArticlePreview({
         return;
       }
 
-      setArticle((current) => ({
-        ...current,
-        title:
-          typeof message.edits.title === 'string'
-            ? message.edits.title
-            : current.title,
-        body:
-          typeof message.edits.body === 'string'
-            ? message.edits.body
-            : current.body,
-      }));
+      setSnapshot(message);
     },
   });
 
@@ -340,8 +357,11 @@ export function ArticlePreview({
 
 The effect installs one global listener and removes it during cleanup. The
 callback ref lets React use the latest edit handler without removing and adding
-the window listener after every render. The merge names the fields it accepts
-instead of spreading an untrusted message over the whole article.
+the window listener after every render. Each message replaces the previous
+snapshot. The component derives the article from saved `initialValues` plus
+current `edits`, validating each accepted field. Removing an edit restores its
+saved value, and a save updates the baseline. When an older bridge omits
+`initialValues`, the server-fetched article supplies the baseline.
 
 Keep the listener in one client component near the preview page root. If many
 descendants need the edited article, put the state in a React context provider

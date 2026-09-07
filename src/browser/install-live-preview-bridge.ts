@@ -9,19 +9,22 @@ export function installLivePreviewBridge(
     __directusLivePreviewBridgeInstalled?: boolean;
   };
   type VueComponent = {
-    parent?: VueComponent | null;
+    isUnmounted?: boolean;
+    isDeactivated?: boolean;
     props?: Record<string, unknown>;
+    subTree?: VueNode;
+  };
+  type VueNode = {
+    el?: Node | null;
+    component?: VueComponent | null;
+    children?: unknown;
+    suspense?: { activeBranch?: VueNode } | null;
   };
   type BridgeState = {
     collection: string;
     edits: Record<string, unknown>;
+    initialValues: Record<string, unknown>;
     primaryKey: unknown;
-  };
-  type EditableElement = HTMLElement & {
-    checked?: boolean;
-    selectedOptions?: Iterable<HTMLOptionElement>;
-    type?: string;
-    value?: string;
   };
 
   const bridgeWindow = window as BridgeWindow;
@@ -40,34 +43,95 @@ export function installLivePreviewBridge(
       : DEFAULT_INTERVAL_MS;
   let previousFrame: HTMLIFrameElement | null = null;
   let previousSignature: string | null = null;
-  let stagedState: BridgeState | null = null;
+  let currentForm: VueComponent | null = null;
 
   function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
   }
 
+  function formCollection(props: Record<string, unknown>): string | null {
+    if (typeof props.collection === 'string' && props.collection)
+      return props.collection;
+    // Directus 12's item route passes field definitions instead of collection.
+    if (!Array.isArray(props.fields)) return null;
+    const first = props.fields[0];
+    if (
+      !isRecord(first) ||
+      typeof first.collection !== 'string' ||
+      !first.collection
+    )
+      return null;
+    return props.fields.every(
+      (field) => isRecord(field) && field.collection === first.collection,
+    )
+      ? first.collection
+      : null;
+  }
+
   function readFormState(): BridgeState | null {
-    for (const element of document.querySelectorAll<HTMLElement>('.v-form')) {
-      let instance = (
-        element as HTMLElement & { __vueParentComponent?: VueComponent }
-      ).__vueParentComponent;
+    for (const element of document.querySelectorAll('.v-form')) {
+      const instance =
+        currentForm &&
+        !currentForm.isUnmounted &&
+        !currentForm.isDeactivated &&
+        currentForm.subTree?.el === element
+          ? currentForm
+          : findForm(element);
+      const props = instance?.props;
+      if (!props) continue;
+      const collection = formCollection(props);
+      if (!collection) continue;
+      currentForm = instance;
+      if (props.loading) return null;
 
-      while (instance) {
+      return {
+        collection,
+        edits: isRecord(props.modelValue) ? props.modelValue : {},
+        initialValues: isRecord(props.initialValues) ? props.initialValues : {},
+        primaryKey: props.primaryKey ?? null,
+      };
+    }
+
+    currentForm = null;
+    return null;
+  }
+
+  function findForm(element: Element): VueComponent | null {
+    // Vue retains the mounted VNode tree in production. Per-element devtools
+    // metadata such as __vueParentComponent is absent from the Data Studio build.
+    const pending: unknown[] = Array.from(
+      document.querySelectorAll<HTMLElement & { _vnode?: VueNode }>(
+        '[data-v-app]',
+      ),
+      (root) => root._vnode,
+    );
+    const visited = new Set<unknown>();
+
+    while (pending.length) {
+      const value = pending.pop();
+      if (!isRecord(value) || visited.has(value)) continue;
+      visited.add(value);
+
+      const node = value as VueNode;
+      const instance = node.component;
+
+      if (instance) {
+        if (instance.isUnmounted || instance.isDeactivated) continue;
         const props = instance.props;
-
         if (
-          typeof props?.collection === 'string' &&
+          instance.subTree?.el === element &&
+          props &&
+          formCollection(props) !== null &&
           'modelValue' in props &&
           'initialValues' in props
-        ) {
-          return {
-            collection: props.collection,
-            edits: isRecord(props.modelValue) ? props.modelValue : {},
-            primaryKey: props.primaryKey ?? null,
-          };
-        }
+        )
+          return instance;
 
-        instance = instance.parent ?? undefined;
+        pending.push(instance.subTree);
+      } else if (node.suspense) {
+        pending.push(node.suspense.activeBranch);
+      } else if (Array.isArray(node.children)) {
+        pending.push(...node.children);
       }
     }
 
@@ -82,82 +146,6 @@ export function installLivePreviewBridge(
     }
 
     return frame;
-  }
-
-  function readFieldEdit(event: Event): {
-    collection: string;
-    field: string;
-    primaryKey: string | null;
-    value: unknown;
-  } | null {
-    const target = event.target as EditableElement | null;
-
-    if (!target) return null;
-
-    const fieldRoot = target.closest(
-      '[data-collection][data-field]',
-    ) as HTMLElement | null;
-
-    if (!fieldRoot) return null;
-
-    const collection = fieldRoot.dataset.collection;
-    const field = fieldRoot.dataset.field;
-
-    if (!collection || !field) return null;
-
-    let value: unknown;
-
-    if (target.type === 'checkbox') {
-      value = Boolean(target.checked);
-    } else if (target.tagName === 'SELECT' && target.hasAttribute('multiple')) {
-      value = Array.from(
-        target.selectedOptions ?? [],
-        (option) => option.value,
-      );
-    } else if ('value' in target) {
-      value = target.value;
-
-      if (target.type === 'number' && value !== '') {
-        const numberValue = Number(value);
-
-        if (Number.isFinite(numberValue)) value = numberValue;
-      }
-    } else if (target.isContentEditable) {
-      value = target.innerHTML;
-    } else {
-      return null;
-    }
-
-    return {
-      collection,
-      field,
-      primaryKey: fieldRoot.dataset.primaryKey ?? null,
-      value,
-    };
-  }
-
-  function captureFieldEdit(event: Event): void {
-    const edit = readFieldEdit(event);
-
-    if (!edit) return;
-
-    if (
-      stagedState?.collection !== edit.collection ||
-      stagedState?.primaryKey !== edit.primaryKey
-    ) {
-      stagedState = {
-        collection: edit.collection,
-        edits: {},
-        primaryKey: edit.primaryKey,
-      };
-    }
-
-    stagedState.edits = {
-      ...stagedState.edits,
-      [edit.field]: edit.value,
-    };
-    previousSignature = null;
-    sync();
   }
 
   function serialize(value: unknown): string | null {
@@ -180,61 +168,28 @@ export function installLivePreviewBridge(
     }
   }
 
-  function sendEdits(
-    frame: HTMLIFrameElement,
-    state: BridgeState,
-    serializedEdits: string,
-  ): void {
-    const targetOrigin = frameOrigin(frame);
-
-    if (!targetOrigin) return;
-
-    frame.contentWindow?.postMessage(
-      {
-        type: MESSAGE_TYPE,
-        collection: state.collection,
-        primaryKey: state.primaryKey,
-        edits: JSON.parse(serializedEdits) as Record<string, unknown>,
-      },
-      targetOrigin,
-    );
-  }
-
   function sync(): void {
     const frame = readPreviewFrame();
-    const vueState = readFormState();
-    let state = vueState ?? stagedState;
-
-    if (
-      vueState &&
-      stagedState?.collection === vueState.collection &&
-      stagedState.primaryKey === vueState.primaryKey
-    ) {
-      state = {
-        ...vueState,
-        edits: { ...vueState.edits, ...stagedState.edits },
-      };
-    }
+    const state = frame ? readFormState() : null;
 
     if (!frame || !state) {
+      currentForm = null;
       previousFrame = null;
       previousSignature = null;
       return;
     }
 
-    const serializedEdits = serialize(state.edits);
-
-    if (serializedEdits === null) return;
-
-    const signature = `${state.collection}\u0000${String(
-      state.primaryKey,
-    )}\u0000${serializedEdits}`;
+    const targetOrigin = frameOrigin(frame);
+    if (!targetOrigin) return;
+    const serializedState = serialize({ type: MESSAGE_TYPE, ...state });
+    if (serializedState === null) return;
+    const signature = `${frame.src}\u0000${serializedState}`;
 
     if (frame === previousFrame && signature === previousSignature) return;
 
+    frame.contentWindow?.postMessage(JSON.parse(serializedState), targetOrigin);
     previousFrame = frame;
     previousSignature = signature;
-    sendEdits(frame, state, serializedEdits);
   }
 
   window.addEventListener('message', (event) => {
@@ -252,7 +207,5 @@ export function installLivePreviewBridge(
     sync();
   });
 
-  document.addEventListener('input', captureFieldEdit, true);
-  document.addEventListener('change', captureFieldEdit, true);
   window.setInterval(sync, pollIntervalMs);
 }
