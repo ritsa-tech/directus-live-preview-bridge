@@ -1,6 +1,6 @@
 {
   "name": "directus-live-preview-bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Stream unsaved Directus item edits to Live Preview frontends.",
   "icon": "preview",
   "keywords": [
